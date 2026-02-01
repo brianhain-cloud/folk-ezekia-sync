@@ -67,10 +67,16 @@ class FolkClient:
         cursor = None
         while True:
             result = self.list_people(limit=100, cursor=cursor)
-            if not result or 'data' not in result:
+            if not result:
                 break
-            all_people.extend(result['data'])
-            cursor = result.get('nextCursor')
+            # Folk API uses 'items' for the data array
+            items = result.get('items', result.get('data', []))
+            if not items:
+                break
+            all_people.extend(items)
+            # Check pagination for next cursor
+            pagination = result.get('pagination', {})
+            cursor = pagination.get('nextCursor') or result.get('nextCursor')
             if not cursor:
                 break
         return all_people
@@ -134,10 +140,16 @@ class FolkClient:
         cursor = None
         while True:
             result = self.list_companies(limit=100, cursor=cursor)
-            if not result or 'data' not in result:
+            if not result:
                 break
-            all_companies.extend(result['data'])
-            cursor = result.get('nextCursor')
+            # Folk API uses 'items' for the data array
+            items = result.get('items', result.get('data', []))
+            if not items:
+                break
+            all_companies.extend(items)
+            # Check pagination for next cursor
+            pagination = result.get('pagination', {})
+            cursor = pagination.get('nextCursor') or result.get('nextCursor')
             if not cursor:
                 break
         return all_companies
