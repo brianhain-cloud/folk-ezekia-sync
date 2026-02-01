@@ -69,11 +69,15 @@ class FolkClient:
             result = self.list_people(limit=100, cursor=cursor)
             if not result:
                 break
-            # Folk API uses 'items' for the data array
+            # Folk API returns 'items' - could be dict (id->person) or list
             items = result.get('items', result.get('data', []))
             if not items:
                 break
-            all_people.extend(items)
+            # Handle both dict and list formats
+            if isinstance(items, dict):
+                all_people.extend(items.values())
+            else:
+                all_people.extend(items)
             # Check pagination for next cursor
             pagination = result.get('pagination', {})
             cursor = pagination.get('nextCursor') or result.get('nextCursor')
@@ -142,11 +146,15 @@ class FolkClient:
             result = self.list_companies(limit=100, cursor=cursor)
             if not result:
                 break
-            # Folk API uses 'items' for the data array
+            # Folk API returns 'items' - could be dict (id->company) or list
             items = result.get('items', result.get('data', []))
             if not items:
                 break
-            all_companies.extend(items)
+            # Handle both dict and list formats
+            if isinstance(items, dict):
+                all_companies.extend(items.values())
+            else:
+                all_companies.extend(items)
             # Check pagination for next cursor
             pagination = result.get('pagination', {})
             cursor = pagination.get('nextCursor') or result.get('nextCursor')
