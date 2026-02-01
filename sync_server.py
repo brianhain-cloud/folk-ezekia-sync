@@ -390,9 +390,19 @@ def sync_folk_people_to_ezekia():
         print("[Sync] No people found in Folk")
         return {"synced": 0, "skipped": 0, "errors": 0}
 
+    print(f"[Sync] Processing {len(people)} people, first item type: {type(people[0]) if people else 'N/A'}")
+
     stats = {"synced": 0, "skipped": 0, "errors": 0}
 
     for person in people:
+        # Handle case where person might be a list or other structure
+        if isinstance(person, list) and len(person) > 0:
+            person = person[0] if isinstance(person[0], dict) else {}
+        if not isinstance(person, dict):
+            print(f"[Sync] Skipping invalid person data type: {type(person)}")
+            stats["errors"] += 1
+            continue
+
         folk_id = person.get("id", "")
 
         # Skip if recently synced from Ezekia (prevent loop)
