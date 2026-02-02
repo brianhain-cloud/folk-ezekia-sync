@@ -367,13 +367,13 @@ def webhook_person_new():
         "jobTitle": data.get("job_title", ""),
     }
 
-    # Handle arrays for email, phone, urls
+    # Handle arrays for email, phone, urls (Folk expects arrays of strings, not objects)
     if data.get("email"):
-        folk_data["emails"] = [{"value": data["email"]}]
+        folk_data["emails"] = [data["email"]]
     if data.get("phone"):
-        folk_data["phones"] = [{"value": data["phone"]}]
+        folk_data["phones"] = [data["phone"]]
     if data.get("linkedin_url"):
-        folk_data["urls"] = [{"value": data["linkedin_url"]}]
+        folk_data["urls"] = [data["linkedin_url"]]
 
     response = folk_client.create_person(folk_data)
 
@@ -408,12 +408,13 @@ def webhook_person_update():
         "jobTitle": data.get("job_title", ""),
     }
 
+    # Folk expects arrays of strings, not objects with 'value' keys
     if data.get("email"):
-        folk_data["emails"] = [{"value": data["email"]}]
+        folk_data["emails"] = [data["email"]]
     if data.get("phone"):
-        folk_data["phones"] = [{"value": data["phone"]}]
+        folk_data["phones"] = [data["phone"]]
     if data.get("linkedin_url"):
-        folk_data["urls"] = [{"value": data["linkedin_url"]}]
+        folk_data["urls"] = [data["linkedin_url"]]
 
     if existing:
         response = folk_client.update_person(existing["id"], folk_data)
@@ -474,6 +475,9 @@ def webhook_company_update():
 
 # Custom field name for Ezekia notes in Folk
 EZEKIA_NOTES_FIELD = "Ezekia Notes"
+
+# Group filter for Folk → Ezekia sync (only sync people in this group)
+FOLK_SYNC_GROUP_NAME = "M Search Main Pipeline"
 
 @app.route('/webhook/note', methods=['POST'])
 def webhook_note():
@@ -618,8 +622,17 @@ def send_to_zapier(url, data):
         return False
 
 
+def is_person_in_sync_group(person):
+    """Check if a person is in the M Search Main Pipeline group"""
+    groups = person.get("groups", [])
+    for group in groups:
+        if isinstance(group, dict) and group.get("name") == FOLK_SYNC_GROUP_NAME:
+            return True
+    return False
+
+
 def sync_folk_people_to_ezekia():
-    """Sync people from Folk → Ezekia via Zapier"""
+    """Sync people from Folk → Ezekia via Zapier (only M Search Main Pipeline group)"""
     state = load_state()
     people = folk_client.get_all_people()
 
@@ -627,9 +640,9 @@ def sync_folk_people_to_ezekia():
         print("[Sync] No people found in Folk")
         return {"synced": 0, "skipped": 0, "errors": 0}
 
-    print(f"[Sync] Processing {len(people)} people, first item type: {type(people[0]) if people else 'N/A'}")
+    print(f"[Sync] Processing {len(people)} people, filtering for '{FOLK_SYNC_GROUP_NAME}' group")
 
-    stats = {"synced": 0, "skipped": 0, "errors": 0}
+    stats = {"synced": 0, "skipped": 0, "errors": 0, "filtered_out": 0}
 
     for person in people:
         # Handle case where person might be a list or other structure
@@ -641,6 +654,11 @@ def sync_folk_people_to_ezekia():
             continue
 
         folk_id = person.get("id", "")
+
+        # Only sync people in the M Search Main Pipeline group
+        if not is_person_in_sync_group(person):
+            stats["filtered_out"] += 1
+            continue
 
         # Skip if recently synced from Ezekia (prevent loop)
         if is_recently_synced(state, folk_id, "ezekia"):
@@ -715,8 +733,17 @@ def sync_folk_people_to_ezekia():
     return stats
 
 
+def is_company_in_sync_group(company):
+    """Check if a company is in the M Search Main Pipeline group"""
+    groups = company.get("groups", [])
+    for group in groups:
+        if isinstance(group, dict) and group.get("name") == FOLK_SYNC_GROUP_NAME:
+            return True
+    return False
+
+
 def sync_folk_companies_to_ezekia():
-    """Sync companies from Folk → Ezekia via Zapier"""
+    """Sync companies from Folk → Ezekia via Zapier (only M Search Main Pipeline group)"""
     state = load_state()
     companies = folk_client.get_all_companies()
 
@@ -724,7 +751,9 @@ def sync_folk_companies_to_ezekia():
         print("[Sync] No companies found in Folk")
         return {"synced": 0, "skipped": 0, "errors": 0}
 
-    stats = {"synced": 0, "skipped": 0, "errors": 0}
+    print(f"[Sync] Processing {len(companies)} companies, filtering for '{FOLK_SYNC_GROUP_NAME}' group")
+
+    stats = {"synced": 0, "skipped": 0, "errors": 0, "filtered_out": 0}
 
     for company in companies:
         # Handle case where company might be a list or other structure
@@ -736,6 +765,11 @@ def sync_folk_companies_to_ezekia():
             continue
 
         folk_id = company.get("id", "")
+
+        # Only sync companies in the M Search Main Pipeline group
+        if not is_company_in_sync_group(company):
+            stats["filtered_out"] += 1
+            continue
 
         # Skip if recently synced from Ezekia
         if is_recently_synced(state, folk_id, "ezekia"):
@@ -867,4 +901,3 @@ if __name__ == '__main__':
     print(f"Folk API Key configured: {bool(FOLK_API_KEY)}")
     print(f"Zapier webhooks configured: person_new={bool(ZAPIER_PERSON_NEW_URL)}, person_update={bool(ZAPIER_PERSON_UPDATE_URL)}")
     app.run(host='0.0.0.0', port=PORT, debug=False)
-
