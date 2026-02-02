@@ -867,3 +867,4 @@ if __name__ == '__main__':
     print(f"Folk API Key configured: {bool(FOLK_API_KEY)}")
     print(f"Zapier webhooks configured: person_new={bool(ZAPIER_PERSON_NEW_URL)}, person_update={bool(ZAPIER_PERSON_UPDATE_URL)}")
     app.run(host='0.0.0.0', port=PORT, debug=False)
+
