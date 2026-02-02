@@ -494,13 +494,21 @@ def webhook_note():
     data = request.json
     print(f"[Webhook] Ezekia note received: {data}")
 
-    note_content = data.get("note", "").strip()
+    # Accept multiple field name variants (Zapier sometimes truncates keys)
+    note_content = (
+        data.get("note", "") or
+        data.get("no", "") or
+        data.get("text", "") or
+        data.get("te", "") or
+        ""
+    ).strip()
+
     if not note_content:
         return jsonify({"status": "error", "message": "No note content provided"}), 400
 
     # Find the person in Folk
     person = None
-    folk_id = data.get("folk_id")
+    folk_id = data.get("folk_id") or data.get("fo", "")
 
     if folk_id:
         # Direct lookup by Folk ID
@@ -508,20 +516,27 @@ def webhook_note():
 
     if not person:
         # Try email lookup
-        email = data.get("email", "")
+        email = data.get("email", "") or data.get("em", "")
         if email:
             person = folk_client.search_person_by_email(email)
 
     if not person:
         # Try name lookup as fallback
-        first_name = data.get("first_name", "")
-        last_name = data.get("last_name", "")
+        first_name = data.get("first_name", "") or data.get("fi", "")
+        last_name = data.get("last_name", "") or data.get("la", "")
         if first_name or last_name:
             person = folk_client.search_person_by_name(first_name, last_name)
 
     if not person:
         # Try full name lookup (for Ezekia's "Item Name" field)
-        full_name = data.get("full_name", "") or data.get("item_name", "")
+        # Accept both standard and truncated key names from Zapier
+        full_name = (
+            data.get("full_name", "") or
+            data.get("fu_", "") or
+            data.get("item_name", "") or
+            data.get("it", "") or
+            ""
+        )
         if full_name:
             person = folk_client.search_person_by_full_name(full_name)
 
