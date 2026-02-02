@@ -484,6 +484,14 @@ def sync_folk_companies_to_ezekia():
     stats = {"synced": 0, "skipped": 0, "errors": 0}
 
     for company in companies:
+        # Handle case where company might be a list or other structure
+        if isinstance(company, list) and len(company) > 0:
+            company = company[0] if isinstance(company[0], dict) else {}
+        if not isinstance(company, dict):
+            print(f"[Sync] Skipping invalid company data type: {type(company)}")
+            stats["errors"] += 1
+            continue
+
         folk_id = company.get("id", "")
 
         # Skip if recently synced from Ezekia
@@ -508,10 +516,12 @@ def sync_folk_companies_to_ezekia():
             continue
 
         # Transform to Ezekia format
+        # Note: Folk API returns urls as arrays of strings, not objects
+        urls = company.get("urls", [])
         ezekia_data = {
             "folk_id": folk_id,
             "name": company.get("name", ""),
-            "website": company.get("urls", [{}])[0].get("value", "") if company.get("urls") else "",
+            "website": urls[0] if urls and isinstance(urls[0], str) else "",
         }
 
         # Determine if new or update
