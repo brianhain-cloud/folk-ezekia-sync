@@ -431,20 +431,23 @@ def sync_folk_people_to_ezekia():
             continue
 
         # Transform Folk data to Ezekia format
+        # Note: Folk API returns emails/phones/urls as arrays of strings, not objects
+        emails = person.get("emails", [])
+        phones = person.get("phones", [])
+        urls = person.get("urls", [])
+
         ezekia_data = {
             "folk_id": folk_id,
             "first_name": person.get("firstName", ""),
             "last_name": person.get("lastName", ""),
-            "email": person.get("emails", [{}])[0].get("value", "") if person.get("emails") else "",
-            "phone": person.get("phones", [{}])[0].get("value", "") if person.get("phones") else "",
+            "email": emails[0] if emails and isinstance(emails[0], str) else "",
+            "phone": phones[0] if phones and isinstance(phones[0], str) else "",
             "position_title": person.get("jobTitle", ""),
         }
 
         # Extract LinkedIn URL if present
-        urls = person.get("urls", [])
-        for url_obj in urls:
-            url = url_obj.get("value", "")
-            if "linkedin" in url.lower():
+        for url in urls:
+            if isinstance(url, str) and "linkedin" in url.lower():
                 ezekia_data["linkedin_url"] = url
                 break
 
