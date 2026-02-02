@@ -116,14 +116,97 @@ class FolkClient:
 
     def search_person_by_email(self, email):
         """Search for a person by email address"""
-        result = self.list_people(limit=100)
-        if result and 'data' in result:
-            for person in result['data']:
-                emails = person.get('emails', [])
-                for e in emails:
-                    if e.get('value', '').lower() == email.lower():
-                        return person
+        if not email:
+            return None
+        people = self.get_all_people()
+        for person in people:
+            if not isinstance(person, dict):
+                continue
+            emails = person.get('emails', [])
+            for e in emails:
+                # Handle both string format and object format
+                email_val = e if isinstance(e, str) else e.get('value', '')
+                if email_val.lower() == email.lower():
+                    return person
         return None
+
+    def search_person_by_name(self, first_name, last_name):
+        """Search for a person by first and last name"""
+        if not first_name and not last_name:
+            return None
+        people = self.get_all_people()
+        for person in people:
+            if not isinstance(person, dict):
+                continue
+            fn = person.get('firstName', '').lower()
+            ln = person.get('lastName', '').lower()
+            if fn == first_name.lower() and ln == last_name.lower():
+                return person
+        return None
+
+    # ==================== GROUPS ====================
+
+    def list_groups(self):
+        """List all groups from Folk"""
+        response = requests.get(f"{FOLK_BASE_URL}/groups", headers=self.headers)
+        print(f"[Folk API] List groups: {response.status_code}")
+        if response.status_code == 200:
+            return response.json()
+        return None
+
+    def get_first_group_id(self):
+        """Get the ID of the first group (for custom fields)"""
+        result = self.list_groups()
+        if result:
+            items = result.get('items', result.get('data', []))
+            if isinstance(items, dict) and items:
+                # Dict format: get first key
+                return list(items.keys())[0]
+            elif isinstance(items, list) and items:
+                # List format: get first item's ID
+                return items[0].get('id', '')
+        return None
+
+    # ==================== CUSTOM FIELDS ====================
+
+    def update_person_custom_field(self, person_id, group_id, field_name, value):
+        """Update a custom field value on a person"""
+        update_data = {
+            "customFieldValues": {
+                group_id: {
+                    field_name: value
+                }
+            }
+        }
+        print(f"[Folk API] Updating custom field '{field_name}' on person {person_id}")
+        return self.update_person(person_id, update_data)
+
+    def append_to_custom_field(self, person_id, group_id, field_name, new_content, timestamp=True):
+        """Append content to a text custom field (for notes history)"""
+        # First get current value
+        person = self.get_person(person_id)
+        if not person:
+            return None
+
+        current_value = ""
+        custom_fields = person.get('customFieldValues', {})
+        if group_id in custom_fields:
+            current_value = custom_fields[group_id].get(field_name, '') or ''
+
+        # Build new value with timestamp
+        if timestamp:
+            ts = datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')
+            new_entry = f"[{ts}] {new_content}"
+        else:
+            new_entry = new_content
+
+        # Append to existing (newest first)
+        if current_value:
+            updated_value = f"{new_entry}\n---\n{current_value}"
+        else:
+            updated_value = new_entry
+
+        return self.update_person_custom_field(person_id, group_id, field_name, updated_value)
 
     # ==================== COMPANIES ====================
 
@@ -364,6 +447,116 @@ def webhook_company_update():
     return jsonify({"status": "received"})
 
 
+# ==================== EZEKIA NOTES → FOLK CUSTOM FIELD ====================
+
+# Custom field name for Ezekia notes in Folk
+EZEKIA_NOTES_FIELD = "Ezekia Notes"
+
+@app.route('/webhook/note', methods=['POST'])
+def webhook_note():
+    """
+    Handle notes from Ezekia → append to Folk custom field
+
+    Expected payload:
+    {
+        "email": "person@email.com",  # Primary lookup
+        "first_name": "John",          # Fallback lookup
+        "last_name": "Doe",            # Fallback lookup
+        "folk_id": "per_xxx",          # Direct lookup if available
+        "note": "The actual note content",
+        "note_type": "activity",       # Optional: activity, comment, etc.
+        "note_date": "2024-01-15"      # Optional: date of the note
+    }
+    """
+    data = request.json
+    print(f"[Webhook] Ezekia note received: {data}")
+
+    note_content = data.get("note", "").strip()
+    if not note_content:
+        return jsonify({"status": "error", "message": "No note content provided"}), 400
+
+    # Find the person in Folk
+    person = None
+    folk_id = data.get("folk_id")
+
+    if folk_id:
+        # Direct lookup by Folk ID
+        person = folk_client.get_person(folk_id)
+
+    if not person:
+        # Try email lookup
+        email = data.get("email", "")
+        if email:
+            person = folk_client.search_person_by_email(email)
+
+    if not person:
+        # Try name lookup as fallback
+        first_name = data.get("first_name", "")
+        last_name = data.get("last_name", "")
+        if first_name or last_name:
+            person = folk_client.search_person_by_name(first_name, last_name)
+
+    if not person:
+        return jsonify({
+            "status": "error",
+            "message": "Person not found in Folk",
+            "searched": {
+                "folk_id": data.get("folk_id"),
+                "email": data.get("email"),
+                "name": f"{data.get('first_name', '')} {data.get('last_name', '')}"
+            }
+        }), 404
+
+    person_id = person.get("id")
+    person_name = f"{person.get('firstName', '')} {person.get('lastName', '')}".strip()
+
+    # Get group ID for custom field
+    group_id = folk_client.get_first_group_id()
+    if not group_id:
+        return jsonify({"status": "error", "message": "No Folk group found for custom fields"}), 500
+
+    # Build note with metadata
+    note_type = data.get("note_type", "note")
+    note_date = data.get("note_date", "")
+
+    formatted_note = f"[{note_type.upper()}]"
+    if note_date:
+        formatted_note += f" ({note_date})"
+    formatted_note += f" {note_content}"
+
+    # Append to custom field
+    response = folk_client.append_to_custom_field(
+        person_id,
+        group_id,
+        EZEKIA_NOTES_FIELD,
+        formatted_note
+    )
+
+    if response and response.status_code in [200, 201]:
+        # Mark as synced from Ezekia
+        state = load_state()
+        mark_synced(state, person_id, "ezekia")
+        save_state(state)
+
+        return jsonify({
+            "status": "success",
+            "folk_id": person_id,
+            "person_name": person_name,
+            "field": EZEKIA_NOTES_FIELD,
+            "group_id": group_id
+        })
+
+    error_msg = response.text if response else "Unknown error"
+    return jsonify({"status": "error", "message": error_msg}), 500
+
+
+@app.route('/debug/groups', methods=['GET'])
+def debug_groups():
+    """Debug: List groups from Folk (needed for custom field setup)"""
+    groups = folk_client.list_groups()
+    return jsonify(groups)
+
+
 # ==================== FOLK → EZEKIA SYNC ====================
 
 def send_to_zapier(url, data):
@@ -443,6 +636,7 @@ def sync_folk_people_to_ezekia():
             "email": emails[0] if emails and isinstance(emails[0], str) else "",
             "phone": phones[0] if phones and isinstance(phones[0], str) else "",
             "position_title": person.get("jobTitle", ""),
+            "description": person.get("description", ""),  # Notes/bio from Folk
         }
 
         # Extract LinkedIn URL if present
@@ -450,6 +644,11 @@ def sync_folk_people_to_ezekia():
             if isinstance(url, str) and "linkedin" in url.lower():
                 ezekia_data["linkedin_url"] = url
                 break
+
+        # Extract company name if linked
+        companies = person.get("companies", [])
+        if companies and isinstance(companies[0], dict):
+            ezekia_data["company_name"] = companies[0].get("name", "")
 
         # Determine if new or update
         is_new = folk_id not in state["people"]
@@ -606,15 +805,16 @@ def health_check():
     return jsonify({
         "status": "healthy",
         "service": "folk-ezekia-sync",
-        "version": "2.0.0",
-        "features": ["ezekia-to-folk", "folk-to-ezekia"],
+        "version": "2.1.0",
+        "features": ["ezekia-to-folk", "folk-to-ezekia", "ezekia-notes-to-folk"],
         "folk_connected": folk_client.test_connection() if FOLK_API_KEY else False,
         "zapier_configured": {
             "person_new": bool(ZAPIER_PERSON_NEW_URL),
             "person_update": bool(ZAPIER_PERSON_UPDATE_URL),
             "company_new": bool(ZAPIER_COMPANY_NEW_URL),
             "company_update": bool(ZAPIER_COMPANY_UPDATE_URL),
-        }
+        },
+        "notes_field": EZEKIA_NOTES_FIELD
     })
 
 
