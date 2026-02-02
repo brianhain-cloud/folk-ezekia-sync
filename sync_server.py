@@ -144,6 +144,29 @@ class FolkClient:
                 return person
         return None
 
+    def search_person_by_full_name(self, full_name):
+        """Search for a person by full name (e.g., 'John Doe')"""
+        if not full_name:
+            return None
+        # Split full name into parts
+        parts = full_name.strip().split()
+        if len(parts) >= 2:
+            first_name = parts[0]
+            last_name = ' '.join(parts[1:])  # Handle multi-part last names
+            return self.search_person_by_name(first_name, last_name)
+        elif len(parts) == 1:
+            # Try matching just first name or last name
+            name = parts[0].lower()
+            people = self.get_all_people()
+            for person in people:
+                if not isinstance(person, dict):
+                    continue
+                fn = person.get('firstName', '').lower()
+                ln = person.get('lastName', '').lower()
+                if fn == name or ln == name:
+                    return person
+        return None
+
     # ==================== GROUPS ====================
 
     def list_groups(self):
@@ -495,6 +518,12 @@ def webhook_note():
         last_name = data.get("last_name", "")
         if first_name or last_name:
             person = folk_client.search_person_by_name(first_name, last_name)
+
+    if not person:
+        # Try full name lookup (for Ezekia's "Item Name" field)
+        full_name = data.get("full_name", "") or data.get("item_name", "")
+        if full_name:
+            person = folk_client.search_person_by_full_name(full_name)
 
     if not person:
         return jsonify({
