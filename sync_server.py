@@ -148,16 +148,20 @@ class FolkClient:
         """Search for a person by full name (e.g., 'John Doe')"""
         if not full_name:
             return None
+        print(f"[Folk API] Searching for person by full name: '{full_name}'")
+
         # Split full name into parts
         parts = full_name.strip().split()
         if len(parts) >= 2:
             first_name = parts[0]
             last_name = ' '.join(parts[1:])  # Handle multi-part last names
+            print(f"[Folk API] Parsed as first='{first_name}', last='{last_name}'")
             return self.search_person_by_name(first_name, last_name)
         elif len(parts) == 1:
             # Try matching just first name or last name
             name = parts[0].lower()
             people = self.get_all_people()
+            print(f"[Folk API] Single name search, checking {len(people)} people for '{name}'")
             for person in people:
                 if not isinstance(person, dict):
                     continue
@@ -165,6 +169,37 @@ class FolkClient:
                 ln = person.get('lastName', '').lower()
                 if fn == name or ln == name:
                     return person
+        return None
+
+    def search_person_by_email_direct(self, email):
+        """Search for a person by email using Folk's search/filter endpoint"""
+        if not email:
+            return None
+        print(f"[Folk API] Direct email search for: '{email}'")
+        # Try using Folk's filter endpoint if available
+        try:
+            response = requests.get(
+                f"{FOLK_BASE_URL}/people",
+                headers=self.headers,
+                params={"q": email, "limit": 10}
+            )
+            print(f"[Folk API] Direct search response: {response.status_code}")
+            if response.status_code == 200:
+                result = response.json()
+                items = result.get('items', result.get('data', []))
+                if isinstance(items, dict):
+                    items = list(items.values())
+                for person in items:
+                    if not isinstance(person, dict):
+                        continue
+                    emails = person.get('emails', [])
+                    for e in emails:
+                        email_val = e if isinstance(e, str) else e.get('value', '')
+                        if email_val.lower() == email.lower():
+                            print(f"[Folk API] Found person via direct search: {person.get('firstName')} {person.get('lastName')}")
+                            return person
+        except Exception as ex:
+            print(f"[Folk API] Direct search error: {ex}")
         return None
 
     # ==================== GROUPS ====================
@@ -518,40 +553,59 @@ def webhook_note():
         # Direct lookup by Folk ID
         person = folk_client.get_person(folk_id)
 
-    if not person:
-        # Try email lookup
-        email = data.get("email", "") or data.get("em", "")
-        if email:
-            person = folk_client.search_person_by_email(email)
+    # Extract search fields with truncated key support
+    email = data.get("email", "") or data.get("em", "") or ""
+    first_name = data.get("first_name", "") or data.get("fi", "") or ""
+    last_name = data.get("last_name", "") or data.get("la", "") or ""
+    full_name = (
+        data.get("full_name", "") or
+        data.get("fu_", "") or
+        data.get("item_name", "") or
+        data.get("it", "") or
+        ""
+    )
 
-    if not person:
-        # Try name lookup as fallback
-        first_name = data.get("first_name", "") or data.get("fi", "")
-        last_name = data.get("last_name", "") or data.get("la", "")
-        if first_name or last_name:
-            person = folk_client.search_person_by_name(first_name, last_name)
+    print(f"[Webhook] Search params - folk_id: '{folk_id}', email: '{email}', first: '{first_name}', last: '{last_name}', full_name: '{full_name}'")
 
-    if not person:
+    if not person and email:
+        # Try email lookup first (most reliable)
+        print(f"[Webhook] Attempting email search...")
+        person = folk_client.search_person_by_email(email)
+        if not person:
+            # Try direct API search as well
+            print(f"[Webhook] Standard email search failed, trying direct API...")
+            person = folk_client.search_person_by_email_direct(email)
+
+    if not person and (first_name or last_name):
+        # Try name lookup
+        print(f"[Webhook] Attempting name search...")
+        person = folk_client.search_person_by_name(first_name, last_name)
+
+    if not person and full_name:
         # Try full name lookup (for Ezekia's "Item Name" field)
-        # Accept both standard and truncated key names from Zapier
-        full_name = (
-            data.get("full_name", "") or
-            data.get("fu_", "") or
-            data.get("item_name", "") or
-            data.get("it", "") or
-            ""
-        )
-        if full_name:
-            person = folk_client.search_person_by_full_name(full_name)
+        print(f"[Webhook] Attempting full name search...")
+        person = folk_client.search_person_by_full_name(full_name)
 
     if not person:
+        # Get count of people for debugging
+        all_people = folk_client.get_all_people()
+        people_names = [(p.get('firstName', ''), p.get('lastName', '')) for p in all_people if isinstance(p, dict)][:20]
+        print(f"[Webhook] FAILED - Person not found. Total people in Folk: {len(all_people)}")
+        print(f"[Webhook] First 20 names: {people_names}")
+
         return jsonify({
             "status": "error",
             "message": "Person not found in Folk",
             "searched": {
-                "folk_id": data.get("folk_id"),
-                "email": data.get("email"),
-                "name": f"{data.get('first_name', '')} {data.get('last_name', '')}"
+                "folk_id": folk_id,
+                "email": email,
+                "first_name": first_name,
+                "last_name": last_name,
+                "full_name": full_name
+            },
+            "debug": {
+                "total_people_in_folk": len(all_people),
+                "sample_names": people_names[:10]
             }
         }), 404
 
